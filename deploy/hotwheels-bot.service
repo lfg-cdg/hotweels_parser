@@ -1,0 +1,15 @@
+[Unit]
+Description=Hot Wheels Detmir Telegram bot
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=hotwheels
+WorkingDirectory=/opt/hotwheels-bot
+ExecStart=/opt/hotwheels-bot/.venv/bin/python -m app.main
+Restart=always
+RestartSec=10
+
+[Install]
+WantedBy=multi-user.target
