@@ -5,7 +5,7 @@
   GET https://api.detmir.ru/v4/products/<id>/delivery?filter=region.iso:<ISO>
                                                                    — наличие и самовывоз по магазинам
 
-Точного количества API не отдаёт: только уровень slvl (HIGH / LOW / LAST) у магазинов с наличием.
+Точного количества API не отдаёт: только уровень slvl (HIGH / MEDIUM / LOW / LAST) у магазинов с наличием.
 У магазинов без товара slvl нет, зато есть collectedAt — дата, когда заказ можно будет забрать
 (товар привезут со склада). Если магазина нет в ответе совсем — товар туда даже под заказ не везут.
 """
@@ -33,8 +33,9 @@ HEADERS = {
 }
 
 # Уровни по возрастанию. NONE — магазина нет в ответе (товара нет).
-LEVELS = {"NONE": 0, "LAST": 1, "LOW": 2, "HIGH": 3}
-LEVEL_TITLES = {"NONE": "нет в наличии", "LAST": "последние штуки", "LOW": "мало", "HIGH": "много"}
+LEVELS = {"NONE": 0, "LAST": 1, "LOW": 2, "MEDIUM": 3, "HIGH": 4}
+LEVEL_TITLES = {"NONE": "нет в наличии", "LAST": "последние штуки", "LOW": "мало", "MEDIUM": "средне",
+                "HIGH": "много"}
 # какие точки считаем магазинами: обычные и мини «Детского мира» (без пунктов выдачи и «Зоозавра»)
 STORE_KINDS = ("DM", "MINI")
 
@@ -63,7 +64,7 @@ class Store:
 @dataclass(frozen=True)
 class StoreStock:
     store: Store
-    level: str  # NONE / LAST / LOW / HIGH
+    level: str  # NONE / LAST / LOW / MEDIUM / HIGH
     availability: str  # all_today — забрать сегодня, all — под заказ
     pickup_at: str  # collectedAt: когда можно забрать заказ (ISO с часовым поясом)
 

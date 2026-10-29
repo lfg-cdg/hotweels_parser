@@ -328,10 +328,13 @@ class Database:
         )
         await self.db.commit()
 
-    async def history(self, product_id: str, only_increase: bool = True, limit: int = 200) -> list[HistoryRow]:
+    async def history(self, product_id: str, only_increase: bool = True, limit: int = 200,
+                      since: str = "") -> list[HistoryRow]:
+        """since — ISO-время UTC: только изменения не раньше него."""
         rows = await self.db.execute_fetchall(
-            "SELECT * FROM stock_history WHERE product_id=? ORDER BY checked_at DESC, id DESC LIMIT ?",
-            (product_id, limit),
+            "SELECT * FROM stock_history WHERE product_id=? AND checked_at>=?"
+            " ORDER BY checked_at DESC, id DESC LIMIT ?",
+            (product_id, since, limit),
         )
         out = [HistoryRow(r["store_code"], r["old_level"], r["new_level"], r["checked_at"], r["collected_at"],
                           r["old_qty"], r["new_qty"]) for r in rows]

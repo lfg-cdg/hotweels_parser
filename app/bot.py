@@ -14,8 +14,8 @@ from aiogram.types import CallbackQuery, InlineKeyboardButton, InlineKeyboardMar
 
 from .auchan import AuchanClient
 from .config import Config
-from .db import NETWORK_TITLES, Database, TrackedProduct
-from .detmir import LEVEL_TITLES, DetmirClient, Store
+from .db import NETWORK_TITLES, Database, HistoryRow, TrackedProduct
+from .detmir import LEVEL_TITLES, LEVELS, DetmirClient, Store
 from .http import SiteError
 from .monitor import APPEARED, IN_TRANSIT, LEVEL_UP, QTY_UP, SOLD_OUT, Monitor, ProductReport
 
@@ -23,12 +23,13 @@ log = logging.getLogger(__name__)
 
 MSK = timezone(timedelta(hours=3))
 MAX_LEN = 4000
+RECENT_MAX = 20  # сколько последних поставок показывать по товару
 
 HELP = """<b>Отслеживание Hot Wheels: «Детский мир» и Ашан</b>
 
 <b>Ашан</b> отдаёт точное количество по каждому магазину. Бот пишет, когда остаток вырос (🆕 — если сразу на {case}+ штук, похоже на новый кейс), когда товар появился там, где было 0, и когда закончился.
 
-<b>«Детский мир»</b> показывает только уровень: <i>много / мало / последние</i>, а для магазинов без товара — дату самовывоза под заказ. Бот пишет, когда товар появился или уровень вырос, когда в магазин стали возить под заказ, и когда товар закончился.
+<b>«Детский мир»</b> показывает только уровень: <i>много / средне / мало / последние</i>, а для магазинов без товара — дату самовывоза под заказ. Бот пишет, когда товар появился или уровень вырос, когда в магазин стали возить под заказ, и когда товар закончился.
 
 <b>Команды</b>
 /add &lt;штрихкод&gt; — добавить товар (ищется в обеих сетях)
@@ -40,7 +41,9 @@ HELP = """<b>Отслеживание Hot Wheels: «Детский мир» и �
 /stores &lt;поиск&gt; — найти магазин и добавить/убрать (например: /stores гагаринский)
 /history &lt;штрихкод&gt; — история поставок по магазинам
 /log &lt;магазин&gt; &lt;кол-во&gt; [штрихкод] — записать остаток со сканера (например: /log гагаринский 630)
-/check — проверить прямо сейчас"""
+/check — проверить прямо сейчас
+
+/check и /status показывают поставки за последние {recent} ч, даже если они были замечены прошлыми проверками."""
 
 
 def fmt_time(iso: str) -> str:
@@ -201,6 +204,28 @@ class App:
             await msg.answer(f"Товар {html.escape(arg)} не отслеживается. Список: /list", parse_mode="HTML")
         return found
 
+    def fmt_change(self, h: HistoryRow) -> str:
+        if h.new_qty is not None and h.old_qty is not None:
+            d = h.new_qty - h.old_qty
+            mark = " 🆕" if d >= self.cfg.case_threshold else ""
+            return f"{h.old_qty} → {h.new_qty} шт (+{d}){mark}"
+        return f"{LEVEL_TITLES[h.old_level]} → {LEVEL_TITLES[h.new_level]}"
+
+    async def recent_lines(self, p: TrackedProduct, stores: dict[str, Store], selected: set[str]) -> list[str]:
+        """Поставки за последние RECENT_HOURS часов — видны и после следующих проверок."""
+        if self.cfg.recent_hours <= 0:
+            return []
+        since = (datetime.now(timezone.utc) - timedelta(hours=self.cfg.recent_hours)).isoformat(timespec="seconds")
+        rows = await self.db.history(p.id, since=since)
+        lines = []
+        for h in rows[:RECENT_MAX]:
+            star = "⭐ " if h.store_code in selected else ""
+            lines.append(f"• {fmt_time(h.checked_at)} — {star}{store_line(stores.get(h.store_code), h.store_code)}")
+            lines.append(f"   {self.fmt_change(h)}")
+        if len(rows) > RECENT_MAX:
+            lines.append(f"…и ещё {len(rows) - RECENT_MAX}, полностью: /history {p.barcode}")
+        return lines
+
     async def resolve_store(self, msg: Message, query: str) -> Store | None:
         found = await self.db.search_stores(query, self.cfg.city_prefix, self.cfg.auchan_exclude)
         exact = [s for s in found if s.code == query.strip()]
@@ -248,7 +273,7 @@ class App:
 
         @r.message(Command("start", "help"))
         async def cmd_help(msg: Message) -> None:
-            await msg.answer(HELP.format(case=self.cfg.case_threshold), parse_mode="HTML")
+            await msg.answer(HELP.format(case=self.cfg.case_threshold, recent=self.cfg.recent_hours), parse_mode="HTML")
 
         @r.message(Command("add"))
         async def cmd_add(msg: Message, command: CommandObject) -> None:
@@ -339,9 +364,10 @@ class App:
                         extra = f", самовывоз {fmt_day(pickup)}" if lvl == "NONE" else ""
                         return f"• {LEVEL_TITLES[lvl]}{extra}: {store_line(stores.get(code), code)}"
 
-                    low = sorted((c for c, (lvl, _) in state.items() if lvl != "HIGH"),
+                    low = sorted((c for c, (lvl, _) in state.items() if LEVELS[lvl] <= LEVELS["LOW"]),
                                  key=lambda c: (state[c][0], state[c][1] or "9", c))
-                    lines.append(f"Магазинов: {len(state)}, «много» — {sum(v[0] == 'HIGH' for v in state.values())}")
+                    count = {lvl: sum(v[0] == lvl for v in state.values()) for lvl in ("HIGH", "MEDIUM")}
+                    lines.append(f"Магазинов: {len(state)}, «много» — {count['HIGH']}, «средне» — {count['MEDIUM']}")
                     if low:
                         lines.append("\n<b>Нет или мало:</b>")
                         lines += [describe(c) for c in low]
@@ -349,6 +375,10 @@ class App:
                     if mode == "selected" and mine:
                         lines.append("\n<b>Выбранные магазины:</b>")
                         lines += [describe(c) for c in mine]
+                recent = await self.recent_lines(p, stores, selected)
+                if recent:
+                    lines.append(f"\n<b>Поставки за {self.cfg.recent_hours} ч:</b>")
+                    lines += recent
                 for part in chunks(lines):
                     await msg.answer(part, parse_mode="HTML", disable_web_page_preview=True)
 
@@ -458,14 +488,7 @@ class App:
             for p in products:
                 by_store: dict[str, list[str]] = defaultdict(list)
                 for h in await self.db.history(p.id):
-                    if h.new_qty is not None and h.old_qty is not None:
-                        d = h.new_qty - h.old_qty
-                        mark = " 🆕" if d >= self.cfg.case_threshold else ""
-                        by_store[h.store_code].append(
-                            f"{fmt_time(h.checked_at)}: {h.old_qty} → {h.new_qty} шт (+{d}){mark}")
-                    else:
-                        by_store[h.store_code].append(
-                            f"{fmt_time(h.checked_at)}: {LEVEL_TITLES[h.old_level]} → {LEVEL_TITLES[h.new_level]}")
+                    by_store[h.store_code].append(f"{fmt_time(h.checked_at)}: {self.fmt_change(h)}")
                 for m in await self.db.manual_history(p.id):
                     d = f" ({m.delta:+d})" if m.delta is not None else ""
                     mark = " 🆕 новый кейс" if m.is_new_case else ""
@@ -522,17 +545,24 @@ class App:
                 return
             await msg.answer("Проверяю… (Ашан — по каждому магазину, это 1–2 минуты)")
             reports = await self.run_check()
-            lines = []
+            stores = await self.db.stores(self.cfg.city_prefix)
+            selected = await self.db.selected_stores()
+            lines, recent = [], []
             for rep in reports:
                 name = f"{html.escape(rep.product.title)} ({rep.product.network_title})"
                 if not rep.ok:
                     lines.append(f"❌ {name}: ошибка")
                     continue
                 have = sum(1 for v in rep.levels.values() if v != "NONE")
-                note = "базовый снимок" if rep.baseline else f"изменений: {len(rep.events)}"
+                note = "базовый снимок" if rep.baseline else f"изменений сейчас: {len(rep.events)}"
                 total = f", всего {sum(rep.qtys.values())} шт" if rep.qtys else ""
                 lines.append(f"✔️ {name}: в наличии в {have} из {len(rep.levels)} магазинов{total}, {note}")
-            await msg.answer("\n".join(lines), parse_mode="HTML")
+                if rows := await self.recent_lines(rep.product, stores, selected):
+                    recent += ["", product_head(rep.product)] + rows
+            if recent:
+                lines += ["", f"<b>Поставки за последние {self.cfg.recent_hours} ч:</b>"] + recent
+            for part in chunks(lines):
+                await msg.answer(part, parse_mode="HTML", disable_web_page_preview=True)
 
 
 def build(cfg: Config, db: Database, client: DetmirClient, bot: Bot,

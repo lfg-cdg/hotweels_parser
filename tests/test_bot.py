@@ -171,6 +171,13 @@ async def test_add_and_auchan_flow(world):
     assert case and "35 → <b>107 шт</b> (+72) 🆕" in case[0] and "46 → <b>48 шт</b> (+2)" in case[0]
     assert case[0].index("107") < case[0].index("48")  # сначала самый большой прирост
 
+    # повторная проверка без изменений — поставка всё равно видна в /check и /status
+    out = joined(await say("/check"))
+    assert "изменений сейчас: 0" in out and "Поставки за последние 24 ч" in out
+    assert "35 → 107 шт (+72) 🆕" in out and "46 → 48 шт (+2)" in out
+    out = joined(await say(f"/status {BARCODE}"))
+    assert "Поставки за 24 ч:" in out and "35 → 107 шт (+72) 🆕" in out
+
     # раскупили — тихое «закончился», затем снова привезли — рост с нуля
     au.qty["512"] = 0
     out = await say("/check")

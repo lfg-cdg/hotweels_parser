@@ -27,6 +27,7 @@ class Config:
     auchan_enabled: bool = True
     auchan_exclude: frozenset[str] = frozenset({"au:009"})  # коды магазинов Ашана, которые не проверяем
     auchan_min_increase: int = 1  # с какого прироста в Ашане присылать уведомление
+    recent_hours: int = 24  # сколько часов показывать последние поставки в /check и /status
 
 
 def _bool(name: str, default: bool) -> bool:
@@ -78,4 +79,5 @@ def load_config(env_file: str | os.PathLike | None = None) -> Config:
             "au:" + c.strip().removeprefix("au:") for c in os.getenv("AUCHAN_EXCLUDE", "009").split(",") if c.strip()
         ),
         auchan_min_increase=max(1, _int("AUCHAN_MIN_INCREASE", 1)),
+        recent_hours=max(0, _int("RECENT_HOURS", 24)),
     )

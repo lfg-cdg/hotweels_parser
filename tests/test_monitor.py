@@ -94,16 +94,16 @@ async def test_full_cycle(env):
     assert [(e.store_code, e.kind, e.old, e.new) for e in r.events] == [("1", APPEARED, "NONE", "LAST")]
 
     # 4) новый магазин, которого мы раньше не видели, — тоже поставка (товара там не было)
-    site.payload = {"stores": [store("1", "LAST"), store("2", "HIGH"), store("9", "HIGH")]}
+    site.payload = {"stores": [store("1", "LAST"), store("2", "HIGH"), store("9", "MEDIUM")]}
     [r] = await mon.check_all()
     assert [(e.store_code, e.kind) for e in r.events] == [("9", APPEARED)]
 
     hist = await db.history(PID)
-    assert {(h.store_code, h.new_level) for h in hist} == {("2", "HIGH"), ("1", "LAST"), ("9", "HIGH")}
+    assert {(h.store_code, h.new_level) for h in hist} == {("2", "HIGH"), ("1", "LAST"), ("9", "MEDIUM")}
 
     # 5) магазин 1 раскупили, но туда везут под заказ — «закончился», не «в пути»
     d = "2026-10-28T00:00:00+03:00"
-    site.payload = {"stores": [store("1", None, pickup=d), store("2", "HIGH"), store("9", "HIGH")]}
+    site.payload = {"stores": [store("1", None, pickup=d), store("2", "HIGH"), store("9", "MEDIUM")]}
     [r] = await mon.check_all()
     assert [(e.store_code, e.kind, e.pickup_at) for e in r.events] == [("1", SOLD_OUT, d)]
     assert r.states["1"] == ("NONE", d)
@@ -229,3 +229,10 @@ async def test_migrates_v2_database(tmp_path):
     assert list(await db.stores("Москва", network="dm")) == ["157"]
     assert [h.new_level for h in await db.history("143502")] == ["HIGH"]
     await db.close()
+
+
+def test_diff_medium_level():
+    prev = {"a": ("LOW", ""), "b": ("MEDIUM", ""), "c": ("HIGH", "")}
+    curr = {"a": ("MEDIUM", ""), "b": ("HIGH", ""), "c": ("MEDIUM", "")}
+    ev = {e.store_code: e.kind for e in diff_states(prev, curr, baseline_done=True)}
+    assert ev == {"a": LEVEL_UP, "b": LEVEL_UP, "c": LEVEL_DOWN}
